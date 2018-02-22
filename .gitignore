@@ -16,3 +16,9 @@ SqueakDebug.log
 # Metacello-github cache
 /github-cache
 github-*.zip
+
+# Custom
+.score/
+example-files/
+node_modules/
+package-lock.json
