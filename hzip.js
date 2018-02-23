@@ -1,8 +1,12 @@
-#!/usr/bin/node
-
 const fs = require('fs');
-const minimist = require('minimist')
-const sprintf = require('sprintf-js');
+const minimist = require('minimist');
+const { sprintf } = require('sprintf-js');
+
+// String.prototype.reverse = function() {
+//   return this.split('').reverse().join('');
+// }
+
+let compareChar = false;
 
 class Tree {
 
@@ -15,72 +19,55 @@ class Tree {
   }
 
   compare(b) {
-    if (this.bitpath !== null || this.count === b.count) {
+    if (compareChar || this.count === b.count) {
       return this.char > b.char;
-    } else if (this.count > b.count) {
-      return true;
-    } else  {
-      return false;
+    } else {
+      return this.count > b.count;
     }
   }
 
-  recurse(size) {
-    return new Promise(resolve => {
-      const collec = new SortedCollection();
+  recurse() {
+    compareChar = true;
+    const collec = new SortedCollection();
 
-      const _recurse = (node, bitpath) => {
+    const _recurse = async (node, bitpath) => {
 
-        if (node.lnode !== null) {
-          _recurse(node.lnode, bitpath + '0');
-        }
-        if (node.rnode !== null) {
-          _recurse(node.rnode, bitpath + '1');
-        }
+      if (node.lnode !== null)
+        await _recurse(node.lnode, bitpath + '0');
+      if (node.rnode !== null)
+        await _recurse(node.rnode, bitpath + '1');
 
-        if (node.lnode === null && node.rnode === null) {
-          node.bitpath = bitpath;
-          collec.add(node);
-        }
+      if (node.lnode === null && node.rnode === null) {
+        node.bitpath = bitpath;
+        collec.add(node);
+      }
+    };
 
-        if (collec.size() === size) {
-          resolve(collec);
-        }
-      };
-
-      if (size === 0) resolve(collec);
-      else _recurse(this, '');
-    });
+    return _recurse(this, '')
+      .then(() => collec);
   }
 
-  postorder(stream, size) {
-    return new Promise(resolve => {
-      let count = 0;
+  async postorder(stream) {
 
-      const _recurse = (node) => {
+    const _recurse = async (node) => {
 
-        if (node.lnode !== null) {
-          _recurse(node.lnode);
-        }
-        if (node.rnode !== null) {
-          _recurse(node.rnode);
-        }
+      if (node.lnode !== null)
+        await _recurse(node.lnode);
+      if (node.rnode !== null)
+        await _recurse(node.rnode);
 
-        if (node.lnode === null && node.rnode === null) {
-          if (node.char > 0 && node.char < 255)
-            stream.write('0' + sprintf('%08b', node.char).split('').reverse().join(''));
-          else stream.write('0' + '00000000' + (node.char === 0 ? '0' : '1'));
-        } else {
-          stream.write('1');
-        }
+      if (node.lnode === null && node.rnode === null) {
+        if (node.char === 0 || node.char === 256)
+          stream.write('000000000' + (node.char === 0 ? '0' : '1'));
+        else
+          stream.write('0' + sprintf('%08b', node.char));
+      } else {
+        stream.write('1');
+      }
+    };
 
-        if (++count === size) {
-          resolve();
-        }
-      };
-
-      if (size === 0) resolve(collec);
-      else _recurse(this);
-    });
+    await _recurse(this);
+    // stream.write('1');
   }
 }
 
@@ -111,10 +98,6 @@ class SortedCollection {
     }
   }
 
-  get(i) { // super inefficient to call on every character
-    return this.arr.find(el => el.char === i);
-  }
-
   map(fn) {
     return this.arr.map(fn);
   }
@@ -122,35 +105,23 @@ class SortedCollection {
 
 const compress = async (data, printTree) => {
 
-  const freq = [];
-  for (let i = 0; i < 256; i++) freq[i] = 0;
+  const freq = new Array(257).fill(0);
 
-  let amount = 0;
-
-  // not necessary
-  const chars = [];
-
-  for (let i = 0; i < data.length; i++) {
-    const char = data.charCodeAt(i);
-    chars.push(char);//temp
+  for (const char of data) {
     freq[char]++;
   }
-  freq[255] = 1;
-  chars.push(255);//temp
+  freq[256] = 1;
 
   const collec = new SortedCollection();
   
   for (let i = 0; i < freq.length; i++) {
     const count = freq[i];
     if (count > 0) {
-      collec.add(new Tree(i, freq[i]));
-      amount++;
+      collec.add(new Tree(i, count));
     }
   }
 
-  const leafAmount = collec.size();
-
-  while(collec.size() > 1) {
+  while (collec.size() > 1) {
     const leastest = collec.shift();
     const least = collec.shift();
 
@@ -163,73 +134,143 @@ const compress = async (data, printTree) => {
 
   const tree = collec.shift();
 
-  // dont need `size` if its syncronous
-  const encodingTable = await tree.recurse(leafAmount);
+  const encodingTable = await tree.recurse();
 
   if (printTree) {
 
     return encodingTable.map((node) => {
-      
-      const { char, count, bitpath } = node;
-      
-      let charString;
-      if (char >= 32 && char <= 126)
-        charString = ' ' + String.fromCharCode(char) + ' ';
-      else if (char === 255)
-        charString = 'EOF';
-      else
-        charString = 'x' + char.toString(16).toUpperCase();
+            
+      let head;
+      if (node.char === 256) head = '%s';
+      // printable in range [33,126]
+      else if (node.char >= 33 && node.char <= 126) head = ' %c ';
+      else head = 'x%02X';
 
-      //  "%3d %5d %s" or "%3c %5d %s"
-      return sprintf('%3c %5d %s', charString, count, bitpath);
-      // return `${charString} ${count} ${bitpath}`;
-    }).join('\n');
+      return sprintf(head + '%8d  %s\n',
+          node.char === 256 ? 'EOF' : node.char, node.count, node.bitpath);
+    }).join('');
 
   } else {
+
     let res = '';
-    let count = 0;
 
     const stream = {
       write: (str) => {
-        count += str.length;
-        res += str;// + '\n';
+        res += str;
       },
     };
 
-    await tree.postorder(stream, leafAmount * 2 - 1);
+    await tree.postorder(stream);
 
-    // res += '----------------\n';
+    // Convert SortedCollection to HashMap where <key>,<value>=char,bitpath
+    const encodingMap = {};
+    encodingTable.map((node) => {
+      encodingMap[node.char] = node.bitpath;
+    });
 
-    for (let char of chars) {
-      stream.write(encodingTable.get(char).bitpath);
+    // read file again
+    for (const char of data) {
+      stream.write(encodingMap[char]);
     }
+    stream.write(encodingMap[256]);
 
-    res += '0'.repeat(8 - (count % 8));
+    const padding = res.length % 8;
+    if (padding > 0)
+      res += '0'.repeat(8 - padding);
 
+    // Convert string to Uint8Array
     return Uint8Array.from(res.match(/.{8}/g).map(el => {
-      return Number.parseInt(el);
+      return Number.parseInt(el, 2);
     }));
-    
-    // return res;
   }
 };
 
 const uncompress = async (data) => {
-  return '';
+
+  // Convert bytes to string of bits
+  const str = data.map(el => sprintf('%08b', el)).join('');
+
+  let i = 0;
+  const stack = [];
+
+  while (true) {
+    if (i >= str.length) {
+      console.error('Stack never emptied');
+      process.exit(1);
+    }
+
+    const isLeaf = str.charAt(i++);
+    // console.error(isLeaf, stack.map(el => el.char));
+
+    if (isLeaf === '0') {
+      let char = Number.parseInt(str.substring(i, i + 8), 2);
+      i += 8;
+      if (char === 0 && str.charAt(i++) === '1') { // char = EOF
+        char = 256;
+      }
+      stack.push(new Tree(char));
+    } else {
+
+      const branch = new Tree();
+      branch.lnode = stack.pop();
+      branch.rnode = stack.pop();
+      stack.push(branch);
+
+      if (stack.length === 1) break;
+    }
+  }
+  
+
+  const tree = stack.pop();
+
+  let node = tree;
+
+  const res = [];
+
+  while (true) {
+
+    if (i >= str.length) {
+      console.error('Never found EOF');
+      process.exit(1);
+    }
+
+    const bit = str.charAt(i++);
+
+    if (node.lnode === null && node.rnode === null) {
+      if (node.char === 256) break;
+      
+      res.push(node.char);
+      node = tree;
+    }
+
+    if (bit === '0') node = node.lnode;
+    else node = node.rnode;
+  }
+
+  return Uint8Array.from(res);
 };
 
 const argv = minimist(process.argv, {
   boolean: ['c','u','d','t'],
 });
-const inputfile = argv._[0];
-const outputfile = argv._[1];
 
-const data = fs.readFileSync(inputfile, { encoding: 'ascii' });
+const inputfile = argv._[2];
+const outputfile = argv._[3];
 
-(argv.c ? compress(data, argv.t) : uncompress(data))
+if (argv._.length > 4 ||
+    !inputfile ||
+    [argv.c, argv.u, argv.t].reduce((c, a) => a ? c + 1 : c, 0) !== 1) {
+
+  console.error('Usage: -cudt inputfile [outputfile]')
+  process.exit(1);
+}
+
+// Converted to array
+const data = [...fs.readFileSync(inputfile)];
+
+(argv.u ? uncompress(data) : compress(data, argv.t))
 .then((result) => {
   if (outputfile) fs.writeFileSync(outputfile, result);
-  else fs.writeFileSync(process.stdout, result);
+  else process.stdout.write(result);
 })
 .catch(console.error);
-
