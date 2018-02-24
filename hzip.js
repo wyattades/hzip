@@ -5,8 +5,8 @@ const { sprintf } = require('sprintf-js');
 // Global Variables:
 
 let compareChar = false;
-let x = 0;
-// Bit helper functions:
+
+// Bit helper functions (*** only js):
 
 Number.prototype.setBit = function(index, bit) {
   if (index < 0 || index > 7) throw new Error('setBit out of bounds');
@@ -71,11 +71,10 @@ class BitStream {
     return bit;
   }
 
-  // This is the function that's broke
   readByte() {
     const chunk = this.fileStream.read(1); // i.e. this.fileStream.next()
     this.fileIndex++; // *** only js
-    // if (this.uncompress) console.log('b:', chunk[0]);
+
     let byte;
 
     // *** only js
@@ -90,10 +89,10 @@ class BitStream {
     if (this.bitindex === 7) {
       return byte;
     } else {
-      // console.error('NOT ALLOWED SRY');
+
       const res = ((this.byte << (7 - this.bitindex)) & 0xFF) |
           (byte >> (this.bitindex + 1));
-      // console.log(sprintf('f: %016b + %016b', ((this.byte << (7 - this.bitindex)) && 0xFF), (byte >> (this.bitindex + 1))));
+
       this.byte = byte;
       return res;
     }
@@ -111,9 +110,6 @@ class BitStream {
         this.bitindex = 7;
       }
     }
-
-    // if (x++ < 20) 
-    // console.log(bits);
   }
 
   writeByte(byte) {
@@ -232,18 +228,18 @@ const getEncodingTable = async (tree) => {
 const postorderWrite = async (tree, stream) => {
 
   const _recurse = async (node) => {
-    if (node !== null) {
+    if (node.lnode !== null)
       await _recurse(node.lnode);
+    if (node.rnode !== null)
       await _recurse(node.rnode);
 
-      if (node.lnode === null && node.rnode === null) {
-        if (node.char === 0 || node.char === 256)
-          await stream.writeBits('000000000' + (node.char === 0 ? '0' : '1'));
-        else
-          await stream.writeBits('0' + sprintf('%08b', node.char));
-      } else {
-        await stream.writeBits('1');
-      }
+    if (node.lnode === null && node.rnode === null) {
+      if (node.char === 0 || node.char === 256)
+        await stream.writeBits('000000000' + (node.char === 0 ? '0' : '1'));
+      else
+        await stream.writeBits('0' + sprintf('%08b', node.char));
+    } else {
+      await stream.writeBits('1');
     }
   };
 
@@ -304,6 +300,9 @@ const compress = async (readStream, writeStream, printTree) => {
 
     await postorderWrite(tree, writeStream);
 
+    // Have to write an extra 1 here!
+    writeStream.writeBits('1');
+
     // Convert SortedCollection to HashMap where <key>,<value>=char,bitpath
     const encodingMap = {};
     await encodingTable.forEach(async (node) => {
@@ -326,36 +325,22 @@ const uncompress = async (readStream, writeStream) => {
   if (readStream.atEnd()) return;
 
   const stack = [];
-  // readStream.uncompress = true;
-  let y = 0;
-  while (true) {
-    if (readStream.atEnd()) {
-      console.error('Stack never emptied');
-      process.exit(1);
-    }
 
+  let y = 0;
+  while (!readStream.atEnd()) {
     const isLeaf = readStream.readBit();
-    // if (y < 20) {
-    //   if (isLeaf === 0) process.stdout.write('0');
-    //   else {y++; console.log('1'); };
-    // }
 
     if (isLeaf === 0) {
       let char = readStream.readByte();
       
-      // if (y < 20)process.stdout.write(sprintf('%08b', char));
       if (char === 0) {
         const extraBit = readStream.readBit();
-        // if (y < 20)process.stdout.write(extraBit.toString());
         if (extraBit === 1) // char = EOF
           char += 256;
       }
 
-      // if (y++ < 20) console.log('');
-
       stack.push(new Tree(char));
     } else {
-
       if (stack.length === 1) break;
 
       const right = stack.pop();
@@ -370,23 +355,19 @@ const uncompress = async (readStream, writeStream) => {
   }
 
   const tree = stack.pop();
+
   let node = tree;
 
-  while (true) {
-    if (readStream.atEnd()) {
-      console.error('Never found EOF');
-      process.exit(1);
-    }
+  while (!readStream.atEnd()) {
 
     const bit = readStream.readBit();
-    // console.log(bit);
 
     if (bit === 0) node = node.lnode;
     else node = node.rnode;
 
     if (node.lnode === null && node.rnode === null) {  
       if (node.char === 256) break;
-      console.log('char', node.char);
+
       await writeStream.writeByte(node.char);
       node = tree;
     }
@@ -416,13 +397,13 @@ const main = async (argv) => {
   // Compress or uncompress
 
   if (argv.u) {
-    console.log('Starting decompression...');
+    // console.log('Starting decompression...');
     await uncompress(readStream, writeStream);
-    console.log('Finished decompression.');
+    // console.log('Finished decompression.');
   } else {
-    console.log('Starting compression...');
+    // console.log('Starting compression...');
     await compress(readStream, writeStream, argv.t);
-    console.log('Finished compression.');
+    // console.log('Finished compression.');
   }
 
   // Flush and close IO streams
