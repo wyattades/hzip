@@ -5,7 +5,7 @@ const { sprintf } = require('sprintf-js');
 // Global Variables:
 
 let compareChar = false;
-
+let x = 0;
 // Bit helper functions:
 
 Number.prototype.setBit = function(index, bit) {
@@ -25,59 +25,114 @@ Number.prototype.isBitSet = function(index) {
 };
 
 class BitStream {
-  constructor(fileStream, readNotWrite) {
-    this.fileStream = fileStream;
-    this.bitindex = readNotWrite ? 0 : 7;
-    this.byte = 0;
+  constructor(filename, readNotWrite) {
+    this.filename = filename;
+    this.readNotWrite = readNotWrite;
+    this.fileStream = null;
+  }
 
-    // *** Only in js
-    if (readNotWrite) {
-      this.atEnd = false;
-      this.fileStream.on('end', () => {
-        this.atEnd = true;
-      });
-    }
+  init() {
+    return new Promise((resolve) => {
+      if (this.fileStream !== null) this.close();
+
+      this.bitindex = 7;
+      this.byte = 0;
+
+      if (this.readNotWrite) {
+        this.fileStream = fs.createReadStream(this.filename, {
+          autoClose: false,
+          end: fs.statSync(this.filename).size,
+        });
+        this.fileStream.pause();
+
+        // *** Only in js
+        this.fileIndex = 0;
+        this.fileStream.on('readable', resolve);
+        this.fileStream.on('error', console.error);
+
+      } else {
+        this.fileStream = this.filename !== null ?
+          fs.createWriteStream(this.filename, { autoClose: false }) : process.stdout;
+
+        resolve();
+      }
+    });
   }
 
   readBit() {
+    if (this.bitindex === 7) {
+      this.byte = this.readByte();
+    }
+    const bit = this.byte.isBitSet(this.bitindex) ? 1 : 0;
     this.bitindex--;
     if (this.bitindex < 0) {
       this.bitindex = 7;
-      this.byte = this.readByte();
     }
-    return this.byte.isBitSet(this.bitindex) ? 1 : 0;
+    return bit;
   }
 
   readByte() {
-    return this.fileStream.read(1)[0];
+    const chunk = this.fileStream.read(1);
+    this.fileIndex++; // *** only js
+
+    let byte;
+
+    if (chunk === null) {
+      // console.dir(this);
+      console.error('Error: No more bytes to read');
+      byte = 0;
+      process.exit(1);
+    } else {
+      byte = chunk[0];
+    }
+
+    if (this.bitindex === 7) {
+      return byte;
+    } else {
+      const mask = 0xFF & (0xFF << this.bitindex);
+      const oldByte = this.byte;
+      this.byte = byte & ~mask;
+      return (oldByte & ~mask) + (byte & mask);
+    }
   }
 
-  writeBits(bits) { // this assumes `bits` is a string
+  async writeBits(bits) { // this assumes `bits` is a string
     for (let i = 0; i < bits.length; i++) {
-      let bit = bits.charCodeAt(i) - 48; // 0 or 1
+      const bit = bits.charCodeAt(i) - 48; // 0 or 1
 
       this.byte = this.byte.setBit(this.bitindex, bit);
       this.bitindex--;
       if (this.bitindex < 0) {
-        this.writeByte(this.byte);
+        await this.writeByte(this.byte);
         this.byte = 0;
         this.bitindex = 7;
       }
     }
+    if (x++ < 20) console.log(bits);
   }
 
   writeByte(byte) {
     // i.e. this.fileStream.putChar(byte)
-    this.fileStream.write(Uint8Array.from([ byte ])); 
+    return new Promise(resolve => this.fileStream.write(Uint8Array.from([ byte ]), null, resolve)); 
   }
 
-  flush() {
-    if (this.bitindex !== 7) this.writeByte(this.byte);
+  writeString(string) {
+    // i.e. this.fileStream.????
+    return new Promise(resolve => this.fileStream.write(string, null, resolve));
+  }
+
+  async flush() {
+    if (this.bitindex !== 7) await this.writeByte(this.byte);
   }
 
   atEnd() {
     //                         i.e. this.fileStream.atEnd()
-    return this.bitindex === 7 && this.atEnd; 
+    return this.bitindex === 7 && this.fileIndex >= this.fileStream.end; 
+  }
+
+  close() {
+    if (this.filename !== null)
+      this.fileStream.close();
   }
 }
 
@@ -142,11 +197,11 @@ class Tree {
 
       if (node.lnode === null && node.rnode === null) {
         if (node.char === 0 || node.char === 256)
-          stream.write('000000000' + (node.char === 0 ? '0' : '1'));
+          await stream.writeBits('000000000' + (node.char === 0 ? '0' : '1'));
         else
-          stream.write('0' + sprintf('%08b', node.char));
+          await stream.writeBits('0' + sprintf('%08b', node.char));
       } else {
-        stream.write('1');
+        await stream.writeBits('1');
       }
     };
 
@@ -182,20 +237,23 @@ class SortedCollection {
     }
   }
 
-  map(fn) {
-    return this.arr.map(fn);
+  async forEach(fn) {
+    for (const el of this.arr) {
+      await fn(el);
+    }
   }
 }
 
-const compress = async (data, printTree) => {
+const compress = async (readStream, writeStream, printTree) => {
 
   const freq = new Array(257).fill(0);
 
-  for (const char of data) {
-    freq[char]++;
+  while (!readStream.atEnd()) {
+    const byte = readStream.readByte();
+    freq[byte]++;
   }
   freq[256] = 1;
-
+  
   const collec = new SortedCollection();
   
   for (let i = 0; i < freq.length; i++) {
@@ -221,7 +279,7 @@ const compress = async (data, printTree) => {
 
   if (printTree) {
 
-    return encodingTable.map((node) => {
+    await encodingTable.forEach(async (node) => {
             
       let head;
       if (node.char === 256) head = '%s';
@@ -229,72 +287,61 @@ const compress = async (data, printTree) => {
       else if (node.char >= 33 && node.char <= 126) head = ' %c ';
       else head = 'x%02X';
 
-      return sprintf(head + '%8d  %s\n',
-          node.char === 256 ? 'EOF' : node.char, node.count, node.bitpath);
-    }).join('');
+      await writeStream.writeString(sprintf(head + '%8d  %s\n',
+          node.char === 256 ? 'EOF' : node.char, node.count, node.bitpath));
+    });
 
-  } else if (data.length === 0) {
-    return '';
   } else {
+    await readStream.init();
 
-    let res = '';
+    if (readStream.atEnd()) return;
 
-    const stream = {
-      write: (str) => {
-        res += str;
-      },
-    };
-
-    await tree.postorder(stream);
+    await tree.postorder(writeStream);
 
     // Convert SortedCollection to HashMap where <key>,<value>=char,bitpath
     const encodingMap = {};
-    encodingTable.map((node) => {
+    await encodingTable.forEach(async (node) => {
       encodingMap[node.char] = node.bitpath;
     });
 
-    // read file again
-    for (const char of data) {
-      stream.write(encodingMap[char]);
+    // read inputfile again
+    while (!readStream.atEnd()) {
+      const bits = encodingMap[readStream.readByte()];
+      await writeStream.writeBits(bits);
     }
-    stream.write(encodingMap[256]);
-
-    const padding = res.length % 8;
-    if (padding > 0)
-      res += '0'.repeat(8 - padding);
-
-    // Convert string to Uint8Array
-    return Uint8Array.from(res.match(/.{8}/g).map(el => {
-      return Number.parseInt(el, 2);
-    }));
+    await writeStream.writeBits(encodingMap[256]);
   }
 };
 
-const uncompress = async (data) => {
 
-  if (data.length === 0) return '';
+const uncompress = async (readStream, writeStream) => {
 
-  // Convert bytes to string of bits
-  const str = data.map(el => sprintf('%08b', el)).join('');
+  // If inputfile is empty, we do nothing
+  if (readStream.atEnd()) return;
 
-  let i = 0;
   const stack = [];
+  let out = '';
 
   while (true) {
-    if (i >= str.length) {
+    if (readStream.atEnd()) {
       console.error('Stack never emptied');
       process.exit(1);
     }
 
-    const isLeaf = str.charAt(i++);
+    const isLeaf = readStream.readBit();
+    console.log(isLeaf.toString());
 
-    if (isLeaf === '0') {
-      let char = Number.parseInt(str.substring(i, i + 8), 2);
-      i += 8;
+    if (isLeaf === 0) {
+      let char = readStream.readByte();
+      process.stdout.write(sprintf('%08b', char));
 
-      if (char === 0 && str.charAt(i++) === '1') { // char = EOF
-        char = 256;
+      if (char === 0) {
+        const extraBit = readStream.readBit();
+        console.log(extraBit);
+        if (extraBit === 1) // char = EOF
+          char += 256;
       }
+      console.log('');
 
       stack.push(new Tree(char));
     } else {
@@ -304,6 +351,7 @@ const uncompress = async (data) => {
       const right = stack.pop();
       const left = stack.pop();
       if (!left || !right) console.error('REAL BAD');
+
       const branch = new Tree();
       branch.setNodes(left, right);
       stack.push(branch);
@@ -311,65 +359,74 @@ const uncompress = async (data) => {
     }
   }
 
-  i--; // Sometimes makes it work
-
   const tree = stack.pop();
-
   let node = tree;
-  const res = [];
 
-  for ( ; true; i++) {
+  while (true) {
 
-    if (i >= str.length) {
+    if (readStream.atEnd()) {
       console.error('Never found EOF');
       process.exit(1);
     }
 
-    const bit = str.charAt(i);
-    if (!bit) console.error('UH OH');
+    const bit = readStream.readBit();
 
-    if (bit === '0') node = node.lnode;
+    if (bit === 0) node = node.lnode;
     else node = node.rnode;
 
     if (node.lnode === null && node.rnode === null) {  
       if (node.char === 256) break;
 
-      res.push(node.char); // i.e. stream.write
+      await writeStream.writeByte(node.char);
       node = tree;
     }
   }
-
-  return Uint8Array.from(res);
 };
 
-const main = () => {
-  const argv = minimist(process.argv, {
-    boolean: ['c','u','d','t'],
-  });
+const main = async (argv) => {
   
+  // Check validity of args
   const inputfile = argv._[2];
-  const outputfile = argv._[3];
+  const outputfile = argv._[3] || null;
   
   if (argv._.length > 4 ||
       !inputfile ||
       [argv.c, argv.u, argv.t].reduce((c, a) => a ? c + 1 : c, 0) !== 1) {
   
-    console.error('Usage: -cudt inputfile [outputfile]')
-    process.exit(1);
+    throw new Error('Usage: -cudt inputfile [outputfile]');
   }
+
+  // Create read and write streams
   
-  // Converted to array
-  const data = [...fs.readFileSync(inputfile)];
+  const readStream = new BitStream(inputfile, true);
+  await readStream.init();
+  const writeStream = new BitStream(outputfile, false);
+  await writeStream.init();
+
+  // Compress or uncompress
+
+  if (argv.u) {
+    console.log('Starting decompression...');
+    await uncompress(readStream, writeStream);
+    console.log('Finished decompression.');
+  } else {
+    console.log('Starting compression...');
+    await compress(readStream, writeStream, argv.t);
+    console.log('Finished compression.');
+  }
+
+  // Flush and close IO streams
   
-  // const readStream = new BitStream();
-  
-  (argv.u ? uncompress(data) : compress(data, argv.t))
-  .then((result) => {
-    if (outputfile) fs.writeFileSync(outputfile, result);
-    else process.stdout.write(result);
-  })
-  .catch(console.error);
+  readStream.close();
+  writeStream.flush();
+  writeStream.close();
 };
 
-main();
 
+main(minimist(process.argv, {
+  boolean: ['c','u','d','t'],
+}))
+.catch(e => {
+  console.error(e);
+  process.exit(1);
+});
