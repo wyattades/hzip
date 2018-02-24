@@ -1,5 +1,6 @@
-#!/opt/smalltalk/bin/gst -f
-" #!/afs/cats.ucsc.edu/courses/cmps112-wm/usr/smalltalk/bin/gst -f "
+#!/afs/cats.ucsc.edu/courses/cmps112-wm/usr/smalltalk/bin/gst -f
+"#!/opt/smalltalk/bin/gst -f"
+
 
 "
 
@@ -17,26 +18,123 @@ debug := false.
 compress := false.
 tree := false.
 uncompress := false.
+Smalltalk at:#compareChar put: false.
 
+Object subclass: BitStream [
+   |bitIndex byte myStream|
+   BitStream class >> new: fileStream [
+      |result|
+      result := super new.
+      result init: fileStream.
+      ^result
+   ]
+   init: fileStream [
+      myStream := fileStream.
+      bitIndex := 1.
+   ]
+   nextBit [
+      bitIndex = 1 ifTrue: [
+         byte := myStream next.
+         bitIndex := 9.
+      ].
+      bitIndex := bitIndex - 1.
+      ^byte value bitAt: bitIndex
+   ]
+   atEnd [
+      ^bitIndex = 1 and: [myStream atEnd]
+   ]
+   currByte [
+      ^byte
+   ]
+]
 
-Object subclass: Zipper [
-  |stream freqTable|
-  Zipper class >> new: _stream [
+Object subclass: Tree [
+  |char count rnode lnode bitpath|
+  char [ ^ char ]
+  count [ ^ count ]
+  rnode [ ^ rnode ]
+  lnode [ ^ lnode ]
+  bitpath [ ^ bitpath ]
+
+  Tree class >> new: aChar count: aCount [
     |result|
     result := super new.
-    result init: _stream.
+    result setChar: aChar andCount: aCount.
     ^result
   ]
-  init: fileStream [
-    stream := _stream.
+
+  setLeft: aLeft andRight: aRight [
+    lnode := aLeft.
+    rnode := aRight.
   ]
-  compress: _stream andTree: isTree [
+
+  setBPath: aPath [
+    bitpath := aPath.
+  ]
+
+  compare: b [
+    (compareChar) | (count = b count) isTrue: [ ^ (char > b char) ] isFalse: [ ^ (count > b count) ].
+  ]
+
+  getPaths [
+    |collec getPathsRecur|
+
+    Smalltalk at: #compareChar put: true.
+
+    collec := SortedCollection new.
+    collec sortBlock: [ :a :b | a compare: b ].
+
+    getPathsRecur := [ :node :bitpath |
+      node lnode isNil isFalse: [
+        getPathsRecur node: node lnode bitpath: bitpath , '0'.
+      ].
+      node rnode isNil isFalse: [
+        getPathsRecur node: node rnode bitpath: bitpath , '1'.
+      ].
+      node lnode isNil & node rnode isNil isTrue: [
+        node setBPath: bitpath.
+        collec add: node.
+      ].
+    ].
+
+    getPathsRecur node: self bitpath: ''.
+
 
   ]
-  uncompress: _stream [
-    
+
+ postOrder: stream currNode: node [
+     node lnode isNil isFalse: [ lnode postOrder: stream currNode: node lnode ]
+     node rnode isNil isFalse: [ rnode postOrder: stream currNode: node rnode ]
+ 
+     node lnode isNil & node rnode isNil isTrue: [
+       (node char = 0) | (node char = 256) isTrue: [
+         stream := stream, '000000000'.
+         (node char = 0) isTrue: [ stream := stream, '0'. ] isFalse: [ stream := stream, '1'. ]
+       ] ifFalse: [
+         stream := stream, '0', (node char value
+       ]
+     ]
+   ]
+]
+
+"Object subclass: Zipper [
+  "|freqTable|"
+
+  compress: data isT: printTree fstream: stream [
+    freqTable := Array new: 257.
+
+    collec := Sorted Collection new.
+    1 to: 257 do: [x: | 
+      count := freqTable at: x.
+      count > 0 isTrue: [  ]
+
+
+    ]
   ]
-].
+
+]
+"
+
 
 FileStream extend [
   |data|
