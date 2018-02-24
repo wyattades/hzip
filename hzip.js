@@ -2,11 +2,84 @@ const fs = require('fs');
 const minimist = require('minimist');
 const { sprintf } = require('sprintf-js');
 
-// String.prototype.reverse = function() {
-//   return this.split('').reverse().join('');
-// }
+// Global Variables:
 
 let compareChar = false;
+
+// Bit helper functions:
+
+Number.prototype.setBit = function(index, bit) {
+  if (index < 0 || index > 7) throw new Error('setBit out of bounds');
+
+  const mask = 1 << index;
+  if (bit === 0) return this & ~mask;
+  else if (bit === 1) return this | mask;
+  else throw new Error('setBit invalid bit');
+};
+
+Number.prototype.isBitSet = function(index) {
+  if (index < 0 || index > 7) throw new Error('isBitSet out of bounds');
+
+  const mask = 1 << index;
+  return (this & mask) !== 0;
+};
+
+class BitStream {
+  constructor(fileStream, readNotWrite) {
+    this.fileStream = fileStream;
+    this.bitindex = readNotWrite ? 0 : 7;
+    this.byte = 0;
+
+    // *** Only in js
+    if (readNotWrite) {
+      this.atEnd = false;
+      this.fileStream.on('end', () => {
+        this.atEnd = true;
+      });
+    }
+  }
+
+  readBit() {
+    this.bitindex--;
+    if (this.bitindex < 0) {
+      this.bitindex = 7;
+      this.byte = this.readByte();
+    }
+    return this.byte.isBitSet(this.bitindex) ? 1 : 0;
+  }
+
+  readByte() {
+    return this.fileStream.read(1)[0];
+  }
+
+  writeBits(bits) { // this assumes `bits` is a string
+    for (let i = 0; i < bits.length; i++) {
+      let bit = bits.charCodeAt(i) - 48; // 0 or 1
+
+      this.byte = this.byte.setBit(this.bitindex, bit);
+      this.bitindex--;
+      if (this.bitindex < 0) {
+        this.writeByte(this.byte);
+        this.byte = 0;
+        this.bitindex = 7;
+      }
+    }
+  }
+
+  writeByte(byte) {
+    // i.e. this.fileStream.putChar(byte)
+    this.fileStream.write(Uint8Array.from([ byte ])); 
+  }
+
+  flush() {
+    if (this.bitindex !== 7) this.writeByte(this.byte);
+  }
+
+  atEnd() {
+    //                         i.e. this.fileStream.atEnd()
+    return this.bitindex === 7 && this.atEnd; 
+  }
+}
 
 class Tree {
 
@@ -18,6 +91,15 @@ class Tree {
     this.bitpath = null;
   }
 
+  setNodes(left, right) {
+    this.lnode = left;
+    this.rnode = right;
+  }
+
+  setBitpath(bitpath) {
+    this.bitpath = bitpath;
+  }
+
   compare(b) {
     if (compareChar || this.count === b.count) {
       return this.char > b.char;
@@ -26,8 +108,9 @@ class Tree {
     }
   }
 
-  recurse() {
+  async getEncodingTable() {
     compareChar = true;
+    
     const collec = new SortedCollection();
 
     const _recurse = async (node, bitpath) => {
@@ -38,13 +121,14 @@ class Tree {
         await _recurse(node.rnode, bitpath + '1');
 
       if (node.lnode === null && node.rnode === null) {
-        node.bitpath = bitpath;
+        node.setBitpath(bitpath);
         collec.add(node);
       }
     };
 
-    return _recurse(this, '')
-      .then(() => collec);
+    await _recurse(this, '');
+
+    return collec;
   }
 
   async postorder(stream) {
@@ -67,10 +151,10 @@ class Tree {
     };
 
     await _recurse(this);
-    // stream.write('1');
   }
 }
 
+// *** Only in js
 class SortedCollection {
 
   constructor() {
@@ -122,19 +206,18 @@ const compress = async (data, printTree) => {
   }
 
   while (collec.size() > 1) {
-    const leastest = collec.shift();
-    const least = collec.shift();
+    const left = collec.shift();
+    const right = collec.shift();
 
-    const tree = new Tree(leastest.char, leastest.count + least.count);
-    tree.lnode = leastest;
-    tree.rnode = least;
+    const tree = new Tree(left.char, left.count + right.count);
+    tree.setNodes(left, right);
 
     collec.add(tree);
   }
 
   const tree = collec.shift();
 
-  const encodingTable = await tree.recurse();
+  const encodingTable = await tree.getEncodingTable();
 
   if (printTree) {
 
@@ -150,6 +233,8 @@ const compress = async (data, printTree) => {
           node.char === 256 ? 'EOF' : node.char, node.count, node.bitpath);
     }).join('');
 
+  } else if (data.length === 0) {
+    return '';
   } else {
 
     let res = '';
@@ -187,6 +272,8 @@ const compress = async (data, printTree) => {
 
 const uncompress = async (data) => {
 
+  if (data.length === 0) return '';
+
   // Convert bytes to string of bits
   const str = data.map(el => sprintf('%08b', el)).join('');
 
@@ -200,77 +287,89 @@ const uncompress = async (data) => {
     }
 
     const isLeaf = str.charAt(i++);
-    // console.error(isLeaf, stack.map(el => el.char));
 
     if (isLeaf === '0') {
       let char = Number.parseInt(str.substring(i, i + 8), 2);
       i += 8;
+
       if (char === 0 && str.charAt(i++) === '1') { // char = EOF
         char = 256;
       }
+
       stack.push(new Tree(char));
     } else {
 
+      if (stack.length === 1) break;
+
+      const right = stack.pop();
+      const left = stack.pop();
+      if (!left || !right) console.error('REAL BAD');
       const branch = new Tree();
-      branch.lnode = stack.pop();
-      branch.rnode = stack.pop();
+      branch.setNodes(left, right);
       stack.push(branch);
 
-      if (stack.length === 1) break;
     }
   }
-  
+
+  i--; // Sometimes makes it work
 
   const tree = stack.pop();
 
   let node = tree;
-
   const res = [];
 
-  while (true) {
+  for ( ; true; i++) {
 
     if (i >= str.length) {
       console.error('Never found EOF');
       process.exit(1);
     }
 
-    const bit = str.charAt(i++);
-
-    if (node.lnode === null && node.rnode === null) {
-      if (node.char === 256) break;
-      
-      res.push(node.char);
-      node = tree;
-    }
+    const bit = str.charAt(i);
+    if (!bit) console.error('UH OH');
 
     if (bit === '0') node = node.lnode;
     else node = node.rnode;
+
+    if (node.lnode === null && node.rnode === null) {  
+      if (node.char === 256) break;
+
+      res.push(node.char); // i.e. stream.write
+      node = tree;
+    }
   }
 
   return Uint8Array.from(res);
 };
 
-const argv = minimist(process.argv, {
-  boolean: ['c','u','d','t'],
-});
+const main = () => {
+  const argv = minimist(process.argv, {
+    boolean: ['c','u','d','t'],
+  });
+  
+  const inputfile = argv._[2];
+  const outputfile = argv._[3];
+  
+  if (argv._.length > 4 ||
+      !inputfile ||
+      [argv.c, argv.u, argv.t].reduce((c, a) => a ? c + 1 : c, 0) !== 1) {
+  
+    console.error('Usage: -cudt inputfile [outputfile]')
+    process.exit(1);
+  }
+  
+  // Converted to array
+  const data = [...fs.readFileSync(inputfile)];
+  
+  // const readStream = new BitStream();
+  
+  (argv.u ? uncompress(data) : compress(data, argv.t))
+  .then((result) => {
+    if (outputfile) fs.writeFileSync(outputfile, result);
+    else process.stdout.write(result);
+  })
+  .catch(console.error);
+};
 
-const inputfile = argv._[2];
-const outputfile = argv._[3];
+main();
 
-if (argv._.length > 4 ||
-    !inputfile ||
-    [argv.c, argv.u, argv.t].reduce((c, a) => a ? c + 1 : c, 0) !== 1) {
-
-  console.error('Usage: -cudt inputfile [outputfile]')
-  process.exit(1);
-}
-
-// Converted to array
-const data = [...fs.readFileSync(inputfile)];
-
-(argv.u ? uncompress(data) : compress(data, argv.t))
-.then((result) => {
-  if (outputfile) fs.writeFileSync(outputfile, result);
-  else process.stdout.write(result);
-})
-.catch(console.error);
