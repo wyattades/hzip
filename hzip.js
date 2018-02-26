@@ -134,6 +134,8 @@ class BitStream {
   }
 
   close() {
+    if (!this.readNotWrite)
+      this.flush();
     if (this.filename !== null)
       this.fileStream.close();
   }
@@ -158,11 +160,11 @@ class Tree {
     this.bitpath = bitpath;
   }
 
-  compare(b) {
-    if (compareChar || this.count === b.count) {
-      return this.char > b.char;
+  compare(other) {
+    if (compareChar || this.count === other.count) {
+      return this.char > other.char;
     } else {
-      return this.count > b.count;
+      return this.count > other.count;
     }
   }
 }
@@ -326,7 +328,6 @@ const uncompress = async (readStream, writeStream) => {
 
   const stack = [];
 
-  let y = 0;
   while (!readStream.atEnd()) {
     const isLeaf = readStream.readBit();
 
@@ -345,7 +346,6 @@ const uncompress = async (readStream, writeStream) => {
 
       const right = stack.pop();
       const left = stack.pop();
-      if (!left || !right) console.error('REAL BAD');
 
       const branch = new Tree();
       branch.setNodes(left, right);
@@ -396,20 +396,14 @@ const main = async (argv) => {
 
   // Compress or uncompress
 
-  if (argv.u) {
-    // console.log('Starting decompression...');
+  if (argv.u)
     await uncompress(readStream, writeStream);
-    // console.log('Finished decompression.');
-  } else {
-    // console.log('Starting compression...');
+  else
     await compress(readStream, writeStream, argv.t);
-    // console.log('Finished compression.');
-  }
 
   // Flush and close IO streams
   
   readStream.close();
-  writeStream.flush();
   writeStream.close();
 };
 

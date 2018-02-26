@@ -11,76 +11,49 @@
 
 " Globals "
 nl := Character nl.
-inputfile := nil.
-outputfile := nil.
-debug := false.
-compress := false.
-tree := false.
-uncompress := false.
-Smalltalk at:#compareChar put: false.
+Smalltalk at: #compareChar put: false.
 
 Object subclass: BitStream [
-  |filename readNotWrite fileStream bitindex byte|
-
-  filename [ ^ filename ]
-  readNotWrite [ ^ readNotWrite ]
-  fileStream [ ^ fileStream ]
-  bitindex [ ^ bitindex ]
-  byte [ ^ byte ]
+  | filename readNotWrite fileStream bitindex byte |
 
   BitStream class >> new: filename readNotWrite: RNW [
     |result|
     result := self new.
-
-    result filename: filename.
-    result readNotWrite: RNW.
+    result init: filename readNotWrite: RNW.
     ^result.
   ]
 
-  setBitIndex: index [
-    bitindex := index.
+  init: _filename readNotWrite: RNW [
+    filename := _filename.  
+    readNotWrite := RNW.
+    self reset.
   ]
 
-  setByte: abyte [
-    byte := abyte.
-  ]
+  reset [
+    fileStream isNil ifTrue: [ self filestream close. ].
 
-  setFileStream: file createNotRead: CNR [
-    file = 'stdout' isTrue: [ filename := stdout. ] isFalse: [
-      CNR isTrue: [
-        fileStream := FileStream open: file mode: FileStream create.
-      ] isFalse: [
-        fileStream := FileStream open: file mode: FileStream read.
+    bitindex := 7.
+    byte := 0.
+
+    readNotWrite ifTrue: [
+      fileStream := FileStream open: filename mode: FileStream read.
+    ] ifFalse: [
+      filename isNil ifTrue: [
+        fileStream := stdout.
+      ] ifFalse: [
+        fileStream := FileStream open: filename mode: FileStream create.
       ].
-    ]
-  ]
-
-  init [
-    fileStream isNil isFalse: [
-      self setBitIndex: 7.
-      self setByte: 0.
-
-      readNotWrite isTrue: [
-        self setFileStream: filename createNotRead: false.
-      ] isFalse: [
-        filename isNil isTrue: [
-          self setFileStream: 'stdout' createNotRead: false.
-        ] isFalse: [].
-          self setFileStream: filename createNotRead: true.
-      ].
-    ] isTrue: [
-      self filestream close.
     ].
   ]
 
   readBit [
     |bit|
-    bitindex = 7 isTrue: [ byte := self readByte. ].
+    bitindex = 7 ifTrue: [ byte := self readByte. ].
     "dont know what byte.isbitset is"
     "confirmed"
     bit := 0.
     bitindex := bitindex - 1.
-    bitindex < 0 isTrue: [ bitindex = 7. ].
+    bitindex < 0 ifTrue: [ bitindex = 7. ].
     ^bit
   ]
 
@@ -89,9 +62,9 @@ Object subclass: BitStream [
 "    |chunk newbyte res|
     chunk := self filestream next.
 
-    bitindex = 7 isTrue: [
+    bitindex = 7 ifTrue: [
       ^newbyte
-    ] isFalse: [
+    ] ifFalse: [
       ??
       res = ((this.newbyte << (7 - this.bitindex)) & 0xFF) |
           (newbyte >> (this.bitindex + 1)).
@@ -103,19 +76,23 @@ Object subclass: BitStream [
 ]
 
 Object subclass: Tree [
-  |char count rnode lnode bitpath|
+  | char count bitpath lnode rnode |
   char [ ^ char ]
   count [ ^ count ]
-  rnode [ ^ rnode ]
-  lnode [ ^ lnode ]
   bitpath [ ^ bitpath ]
+  lnode [ ^ lnode ]
+  rnode [ ^ rnode ]
 
-  Tree class >> new: aChar count: aCount [
+  Tree class >> new: _char count: _count [
     |result|
     result := self new.
-    result char: aChar.
-    result count: aCount.
-    ^result
+    result init: _char count: _count.
+    ^ result
+  ]
+
+  init: _char count: _count [
+    char := _char.
+    _count := _count.
   ]
 
   setLeft: aLeft andRight: aRight [
@@ -127,250 +104,233 @@ Object subclass: Tree [
     bitpath := aPath.
   ]
 
-  compare: b [
-    (compareChar) | (count = b count) isTrue: [
-      ^ (char > b char)
-    ] isFalse: [
-      ^ (count > b count)
-    ].
+  <= other [
+    compareChar | (count = other count) 
+      ifTrue: [ ^ char > other char ]
+      ifFalse: [ ^ count > other count ].
   ]
-
-  getEncodingTable [
-    |collec getETrecur|
-    Smalltalk at: #compareChar put: true.
-
-    collec := SortedCollection new.
-    collec sortBlock: [ :a :b | a compare: b ].
-
-    getETrecur := [ :node :bitpath |
-      node lnode isNil isFalse: [
-        getETrecur node: node lnode bitpath: bitpath , '0'.
-      ].
-
-      node rnode isNil isFalse: [
-        getETrecur node: node rnode bitpath: bitpath , '1'.
-      ].
-
-      node lnode isNil & node rnode isNil isTrue: [
-        node setBitpath: bitpath.
-        collec add: node.
-      ].
-    ].
-    getETrecur node: self bitpath: ''.
-
-    ^collec
-  ]
-
-  postOrderWrite: stream [
-    POWrecur := [ :node |
-      node lnode isNil isFalse: [
-        POWrecur node: node lnode.
-      ].
-
-      node rnode isNil isFalse: [
-        POWrecur node: node rnode.
-      ].
-
-      node lnode isNil & node rnode isNil isTrue: [
-        node char = 0 || node char = 256 isTrue: [
-          stream nextPutAll: '000000000'.
-          node char = 0 isTrue: [
-            stream nextPut: '0'.
-          ] isFalse: [
-            stream nextPut: '1'.
-          ].
-        ] isFalse: [
-          stream nextPut: '0'.
-          node char printOn: stream base: 2.
-        ]
-      ] isFalse: [
-        stream nextPut: '1'.
-      ].
-    ].
-
-    POWrecur node: self.
-  ]
-
 ]
 
-Object subclass: Zipper [
-  |freq collec|
+getEncodingTable := [
+  | collec _recurse |
 
-  compress: readStream write: writeStream tree: printTree [
-    |byte encodingTable encodingMap tree|
-    freq := Array new: 257.
+  Smalltalk at: #compareChar put: true.
 
-    [ readStream atEnd ] whileFalse: [
-      byte := readStream nextByte.
-      freq at: byte put: (freq at: byte) + 1.
+  collec := SortedCollection new.
+  " need this????: collec sortBlock: [ :a :b | a compare: b ]. "
+
+  _recurse := [ :node :bitpath |
+    node lnode isNil ifFalse: [
+      _recurse node: node lnode bitpath: bitpath , '0'.
+    ].
+    node rnode isNil ifFalse: [
+      _recurse node: node rnode bitpath: bitpath , '1'.
     ].
 
-    freq at: 256 put: 1.
+    node lnode isNil & node rnode isNil ifTrue: [
+      node setBitpath: bitpath.
+      collec add: node.
+    ].
+  ].
 
-    collec := SortedCollection new.
-    collec sortBlock: [ :a :b | a compare: b ].
+  _recurse node: self bitpath: ''.
 
-    0 to: 257 do: [:x |
-      |count|
-      count := freq at: x.
-      count > 0 isTrue: [
-        collec add: (Tree new: x count: count).
+  ^collec
+]
+
+postOrderWrite := [ :stream |
+  | _recurse |
+  _recurse := [ :node |
+    node lnode isNil ifFalse: [
+      _recurse node: node lnode.
+    ].
+    node rnode isNil ifFalse: [
+      _recurse node: node rnode.
+    ].
+
+    node lnode isNil & node rnode isNil ifTrue: [
+      node char = 0 || node char = 256 ifTrue: [
+        stream nextPutAll: '000000000'.
+        node char = 0 ifTrue: [
+          stream nextPut: '0'.
+        ] ifFalse: [
+          stream nextPut: '1'.
+        ].
+      ] ifFalse: [
+        stream nextPut: '0'.
+        node char printOn: stream base: 2.
       ]
+    ] ifFalse: [
+      stream nextPut: '1'.
     ].
+  ].
 
-    collec size > 1 whileTrue: [
-      |left right tree|
-      left := collec last.
-      collec removeLast.
+  _recurse node: self.
+]
 
-      right := collec last.
-      collec removeLast.
+compress := [ :readStream :writeStream :printTree |
+  | byte encodingTable encodingMap tree freq collec |
+  freq := Array new: 257.
 
-      tree := Tree new: left char count: (left count + right count).
-      tree setLeft: left andRight: right.
+  [ readStream atEnd ] whileFalse: [
+    byte := readStream nextByte.
+    freq at: byte put: (freq at: byte) + 1.
+  ].
 
-      collec add: tree.
-    ].
+  freq at: 256 put: 1.
 
-    tree := collec last.
+  collec := SortedCollection new.
+  collec sortBlock: [ :a :b | a compare: b ].
+
+  0 to: 257 do: [:x |
+    |count|
+    count := freq at: x.
+    count > 0 ifTrue: [
+      collec add: (Tree new: x count: count).
+    ]
+  ].
+
+  collec size > 1 whileTrue: [
+    |left right tree|
+    left := collec last.
     collec removeLast.
 
-    encodingTable := tree getEncodingTable.
+    right := collec last.
+    collec removeLast.
 
-    printTree isTrue: [
-      encodingTable do: [:node |
-        |head|
+    tree := Tree new: left char count: (left count + right count).
+    tree setLeft: left andRight: right.
 
-        node char = 256 isTrue: [ head := '%s'. ] isFalse: [
-          "printable range 33-126"
-          node char >= 33 & node char <= 126 isTrue: [
-            head = ' %c '.
-          ] isFalse: [
-            head = 'x%02X'.
-          ].
+    collec add: tree.
+  ].
+
+  tree := collec last.
+  collec removeLast.
+
+  encodingTable := tree getEncodingTable.
+
+  printTree ifTrue: [
+    encodingTable do: [:node |
+      |head|
+
+      node char = 256 ifTrue: [ head := '%s'. ] ifFalse: [
+        "printable range 33-126"
+        node char >= 33 & node char <= 126 ifTrue: [
+          head = ' %c '.
+        ] ifFalse: [
+          head = 'x%02X'.
         ].
-        
-        node char = 256 isTrue: [
-          writeStream nextPutAll: 'WILL BE REPLACED WITH THE RIGHT STUFF LATER'.
-          "writeStream nextPutAll: head , '%8d %s\n' , "
-        ] isFalse: [
-          writeStream nextPutAll: 'WILL BE REPLACED WITH THE RIGHT STUFF LATER'.
-        ].
       ].
-    ] isFalse: [
-      readStream init.
-
-      "not sure what to do with: if (readStream.atEnd()) return;"
-
-      tree postOrderWrite: writeStream.
-
-      "wouldnt dare forget this 1!"
-      writeStream writeBits: '1'.
-
-      encodingMap = Array new: 257.
-      encodingTable do: [:node |
-        encodingMap at:(node char) put: (node bitpath).
+      
+      node char = 256 ifTrue: [
+        writeStream nextPutAll: 'WILL BE REPLACED WITH THE RIGHT STUFF LATER'.
+        "writeStream nextPutAll: head , '%8d %s\n' , "
+      ] ifFalse: [
+        writeStream nextPutAll: 'WILL BE REPLACED WITH THE RIGHT STUFF LATER'.
       ].
-
-      [ readStream atEnd ] whileFalse: [
-        |bits|
-        bits := encodingMap at:(readStream readByte).
-        writeStream writeBits: bits.
-      ].
-      writeStream writeBits: (encodingMap at:256).
     ].
-  ]
+  ] ifFalse: [
+    readStream reset.
 
-  uncompress: readStream write: writeStream [
-    |stack y isLeaf tree node|
     "not sure what to do with: if (readStream.atEnd()) return;"
 
-    "dont know how big to make the array"
-    stack := Collection new.
+    tree postOrderWrite: writeStream.
 
-    y := 0.
+    "wouldnt dare forget this 1!"
+    writeStream writeBits: '1'.
+
+    encodingMap = Array new: 257.
+    encodingTable do: [:node |
+      encodingMap at:(node char) put: (node bitpath).
+    ].
 
     [ readStream atEnd ] whileFalse: [
-      |char|
-      isLeaf := readStream readByte.
-
-      isLeaf = 0 isTrue: [
-        char := readStream readByte.
-
-        char = 0 isTrue: [
-          |extraBit|
-          extraBit := readStream readBit.
-          extraBit = 1 isTrue: [ char := 256. ].
-        ].
-
-        stack addLast: (Tree new: char count: nil).
-      ] isFalse: [
-        "dont know how to break"
-        "stack length = 1 ifTrue: break."
-
-        [ stack length > 1 ] whileTrue: [
-          |left right branch|
-          right := stack last.
-          stack removeLast.
-
-          left := stack last.
-          stack removeLast.
-
-          "skipping (!left || !right) check"
-
-          branch = Tree new: nil count: nil.
-          branch setLeft: left andRight: right.
-          stack addLast: branch.
-        ].
-      ].
+      |bits|
+      bits := encodingMap at:(readStream readByte).
+      writeStream writeBits: bits.
     ].
-
-    tree := stack last.
-    node := tree.
-
-    [ readStream atEnd ] whileFalse: [
-      |bit|
-      bit := readStream readBit.
-
-      bit = 0 isTrue: [
-        node := (node lnode).
-      ] isFalse: [
-        node := (node rnode).
-      ].
-
-      node lnode isNil & node rnode isNil & node char ~= 256 isTrue: [
-        writeStream writeByte: node char.
-        node = tree.
-      ].
-    ].
-  ]
-]
-
-
-FileStream extend [
-  |data|
-  testRead [
-    data := ''.
-    [ self atEnd ] whileFalse: [
-      data := data , self nextLine , Character nl asString.
-    ].
-    ^data
-  ]
-
-  testWrite: data [ 
-    self nextPutAll: data.
-  ]
+    writeStream writeBits: (encodingMap at:256).
+  ].
 ].
 
-" Parse arguments "
+uncompress := [ :readStream :writeStream |
+  |stack isLeaf tree node|
+  "not sure what to do with: if (readStream.atEnd()) return;"
+
+  "dont know how big to make the array"
+  stack := Collection new.
+
+  [ readStream atEnd ] whileFalse: [
+    |char|
+    isLeaf := readStream readByte.
+
+    isLeaf = 0 ifTrue: [
+      char := readStream readByte.
+
+      char = 0 ifTrue: [
+        |extraBit|
+        extraBit := readStream readBit.
+        extraBit = 1 ifTrue: [ char := 256. ].
+      ].
+
+      stack addLast: (Tree new: char count: nil).
+    ] ifFalse: [
+      "dont know how to break"
+      "stack length = 1 ifTrue: break."
+
+      [ stack length > 1 ] whileTrue: [
+        |left right branch|
+        right := stack last.
+        stack removeLast.
+
+        left := stack last.
+        stack removeLast.
+
+        "skipping (!left || !right) check"
+
+        branch = Tree new: nil count: nil.
+        branch setLeft: left andRight: right.
+        stack addLast: branch.
+      ].
+    ].
+  ].
+
+  tree := stack last.
+  node := tree.
+
+  [ readStream atEnd ] whileFalse: [
+    |bit|
+    bit := readStream readBit.
+
+    bit = 0 ifTrue: [
+      node := (node lnode).
+    ] ifFalse: [
+      node := (node rnode).
+    ].
+
+    node lnode isNil & node rnode isNil & node char ~= 256 ifTrue: [
+      writeStream writeByte: node char.
+      node = tree.
+    ].
+  ].
+].
+
+
 [
+  | mode inputfile outputfile |
+
+" Parse arguments "
+
   Smalltalk arguments: '-d -c -t -u'
   do: [:opt :arg |
     arg = nil ifTrue: [
-      opt = $d ifTrue: [ debug := true. ].
-      opt = $c ifTrue: [ compress := true. ].
-      opt = $t ifTrue: [ tree := true. ].
-      opt = $u ifTrue: [ uncompress := true. ].
+      (opt = $c | opt = $t | opt = $u) ifTrue: [
+        mode isNil ifTrue: [
+          mode := opt.
+        ] ifFalse: [
+          Exception signal: 'must provide only one option'.
+        ].
+      ].
     ] ifFalse: [
       inputfile isNil ifTrue: [
         inputfile := arg.
@@ -384,51 +344,36 @@ FileStream extend [
     ].
   ].
   
-  inputfile isNil ifTrue:[
+  inputfile isNil ifTrue: [
     Exception signal: 'must provide inputfile'.
   ].
 
-  ((compress & uncompress) |
-  (compress & tree) | (tree & uncompress)) ifTrue: [
-    Exception signal: 'must provide only one option'.
+  mode isNil ifTrue: [
+    Exception signal: 'must provide one option'.
   ].
 
-  compress ifTrue: [
-    "zip compress: inputfile write: outputfile tree: false."
-  ] ifFalse: [
-    uncompress ifTrue: [
-      "zip uncompress: inputfile write: outputfile."
+  [
+    readStream := BitStream new: inputfile readNotWrite: true.
+    writeStream := BitStream new: outputfile readNotWrite: false.
+
+    mode = $u ifTrue: [
+      uncompress readStream: readStream writeStream: writeStream.
     ] ifFalse: [
-      tree ifTrue: [
-        "zip compress: inputfile write: outputfile tree: true."
-      ] ifFalse:[
-        Exception signal: 'must provide one option'
-      ]
-    ]
-  ]
+      compress readStream: readStream 
+          writeStream: writeStream printTree: mode = $t.
+    ].
+
+    readStream close.
+    writeStream close.
+  ] on: SystemExceptions.FileError do: [:err |
+    " Print file open error and exit "
+    stderr << 'Error: ' << err messageText << nl.
+    ObjectMemory quit: 1.
+  ].
+
 ] on: Exception do: [ :err |
   " Print parsing error, print usage, and exit "
   stderr << 'Error: ' << err messageText << nl
     << 'Usage: -dtcu inputfile [outputfile]' << nl.
   ObjectMemory quit: 1.
 ].
-
-[
-  | data |
-  input := FileStream open: inputfile mode: FileStream read.
-  data := input testRead.
-  input close.
-
-  " outputfile := stdout. "
-  output := FileStream open: outputfile mode: FileStream create.
-  output testWrite: data.
-  output close.
-] on: SystemExceptions.FileError do: [:err |
-  " Print file open error and exit "
-  stderr << 'Error: ' << err messageText << nl.
-  ObjectMemory quit: 1.
-].
-
-
-" Exit success "
-ObjectMemory quit: 0.
