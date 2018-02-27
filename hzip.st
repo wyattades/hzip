@@ -1,5 +1,5 @@
-#!/afs/cats.ucsc.edu/courses/cmps112-wm/usr/smalltalk/bin/gst -f
-"#!/opt/smalltalk/bin/gst -f"
+#!/opt/smalltalk/bin/gst -f
+" #!/afs/cats.ucsc.edu/courses/cmps112-wm/usr/smalltalk/bin/gst -f "
 
 "
 
@@ -9,28 +9,33 @@
 "
 
 
-" Globals "
+"
+  Globals
+"
 nl := Character nl.
 Smalltalk at: #compareChar put: false.
 
+"
+  class BitStream
+"
 Object subclass: BitStream [
   | filename readNotWrite fileStream bitindex byte |
 
-  BitStream class >> new: filename readNotWrite: RNW [
+  BitStream class >> new: iFilename readNotWrite: iReadNotWrite [
     |result|
     result := self new.
-    result init: filename readNotWrite: RNW.
+    result init: iFilename readNotWrite: iReadNotWrite.
     ^result.
   ]
 
-  init: _filename readNotWrite: RNW [
-    filename := _filename.  
-    readNotWrite := RNW.
+  init: iFilename readNotWrite: iReadNotWrite [
+    filename := iFilename.  
+    readNotWrite := iReadNotWrite.
     self reset.
   ]
 
   reset [
-    fileStream isNil ifTrue: [ self filestream close. ].
+    fileStream isNil ifFalse: [ self close. ].
 
     bitindex := 7.
     byte := 0.
@@ -60,7 +65,7 @@ Object subclass: BitStream [
   readByte [
     ^0000
 "    |chunk newbyte res|
-    chunk := self filestream next.
+    chunk := fileStream next.
 
     bitindex = 7 ifTrue: [
       ^newbyte
@@ -73,8 +78,36 @@ Object subclass: BitStream [
       ^res"
     "]."
   ]
+
+  writeByte: newByte [
+
+  ]
+
+  writeString: bits [
+
+  ]
+
+  flush [
+    bitindex ~= 7 ifTrue: [ self writeByte byte. ].
+  ]
+
+  atEnd [
+    ^ fileStream atEnd
+  ]
+
+  close [
+    readNotWrite ifFalse: [
+      self flush.
+    ].
+    filename isNil ifFalse: [
+      fileStream close.
+    ].
+  ]
 ]
 
+"
+  class Tree
+"
 Object subclass: Tree [
   | char count bitpath lnode rnode |
   char [ ^ char ]
@@ -83,16 +116,16 @@ Object subclass: Tree [
   lnode [ ^ lnode ]
   rnode [ ^ rnode ]
 
-  Tree class >> new: _char count: _count [
+  Tree class >> new: iChar count: iCount [
     |result|
     result := self new.
-    result init: _char count: _count.
+    result init: iChar count: iCount.
     ^ result
   ]
 
-  init: _char count: _count [
-    char := _char.
-    _count := _count.
+  init: iChar count: iCount [
+    char := iChar.
+    count := iCount.
   ]
 
   setLeft: aLeft andRight: aRight [
@@ -111,20 +144,23 @@ Object subclass: Tree [
   ]
 ]
 
-getEncodingTable := [
-  | collec _recurse |
+"
+  returns encoding table
+"
+getEncodingTable := [ :tree |
+  | collec recurse |
 
   Smalltalk at: #compareChar put: true.
 
   collec := SortedCollection new.
   " need this????: collec sortBlock: [ :a :b | a compare: b ]. "
 
-  _recurse := [ :node :bitpath |
+  recurse := [ :node :bitpath |
     node lnode isNil ifFalse: [
-      _recurse node: node lnode bitpath: bitpath , '0'.
+      recurse node: node lnode bitpath: bitpath , '0'.
     ].
     node rnode isNil ifFalse: [
-      _recurse node: node rnode bitpath: bitpath , '1'.
+      recurse node: node rnode bitpath: bitpath , '1'.
     ].
 
     node lnode isNil & node rnode isNil ifTrue: [
@@ -133,19 +169,22 @@ getEncodingTable := [
     ].
   ].
 
-  _recurse node: self bitpath: ''.
+  recurse node: tree bitpath: ''.
 
   ^collec
-]
+].
 
-postOrderWrite := [ :stream |
-  | _recurse |
-  _recurse := [ :node |
+"
+  write file encoding to stream using postOrder traversel
+"
+postOrderWrite := [ :tree :stream |
+  | recurse |
+  recurse := [ :node |
     node lnode isNil ifFalse: [
-      _recurse node: node lnode.
+      recurse node: node lnode.
     ].
     node rnode isNil ifFalse: [
-      _recurse node: node rnode.
+      recurse node: node rnode.
     ].
 
     node lnode isNil & node rnode isNil ifTrue: [
@@ -165,11 +204,15 @@ postOrderWrite := [ :stream |
     ].
   ].
 
-  _recurse node: self.
-]
+  recurse node: tree.
+].
 
+"
+  compress file
+"
 compress := [ :readStream :writeStream :printTree |
   | byte encodingTable encodingMap tree freq collec |
+
   freq := Array new: 257.
 
   [ readStream atEnd ] whileFalse: [
@@ -207,7 +250,7 @@ compress := [ :readStream :writeStream :printTree |
   tree := collec last.
   collec removeLast.
 
-  encodingTable := tree getEncodingTable.
+  encodingTable := getEncodingTable tree: tree.
 
   printTree ifTrue: [
     encodingTable do: [:node |
@@ -234,7 +277,7 @@ compress := [ :readStream :writeStream :printTree |
 
     "not sure what to do with: if (readStream.atEnd()) return;"
 
-    tree postOrderWrite: writeStream.
+    postOrderWrite tree: tree stream: writeStream.
 
     "wouldnt dare forget this 1!"
     writeStream writeBits: '1'.
@@ -253,6 +296,9 @@ compress := [ :readStream :writeStream :printTree |
   ].
 ].
 
+"
+  uncompress file
+"
 uncompress := [ :readStream :writeStream |
   |stack isLeaf tree node|
   "not sure what to do with: if (readStream.atEnd()) return;"
@@ -316,15 +362,19 @@ uncompress := [ :readStream :writeStream |
 ].
 
 
+"
+  Main
+"
+
+| mode inputfile outputfile readStream writeStream |
+
 [
-  | mode inputfile outputfile |
 
-" Parse arguments "
-
+  " Parse arguments "
   Smalltalk arguments: '-d -c -t -u'
   do: [:opt :arg |
-    arg = nil ifTrue: [
-      (opt = $c | opt = $t | opt = $u) ifTrue: [
+    arg isNil ifTrue: [
+      opt ~= $d ifTrue: [
         mode isNil ifTrue: [
           mode := opt.
         ] ifFalse: [
@@ -343,7 +393,7 @@ uncompress := [ :readStream :writeStream |
       ].
     ].
   ].
-  
+
   inputfile isNil ifTrue: [
     Exception signal: 'must provide inputfile'.
   ].
@@ -352,28 +402,31 @@ uncompress := [ :readStream :writeStream |
     Exception signal: 'must provide one option'.
   ].
 
-  [
-    readStream := BitStream new: inputfile readNotWrite: true.
-    writeStream := BitStream new: outputfile readNotWrite: false.
-
-    mode = $u ifTrue: [
-      uncompress readStream: readStream writeStream: writeStream.
-    ] ifFalse: [
-      compress readStream: readStream 
-          writeStream: writeStream printTree: mode = $t.
-    ].
-
-    readStream close.
-    writeStream close.
-  ] on: SystemExceptions.FileError do: [:err |
-    " Print file open error and exit "
-    stderr << 'Error: ' << err messageText << nl.
-    ObjectMemory quit: 1.
-  ].
-
 ] on: Exception do: [ :err |
   " Print parsing error, print usage, and exit "
   stderr << 'Error: ' << err messageText << nl
     << 'Usage: -dtcu inputfile [outputfile]' << nl.
   ObjectMemory quit: 1.
 ].
+
+" open read and write streams, and catch file errors "
+[
+  readStream := BitStream new: inputfile readNotWrite: true.
+  writeStream := BitStream new: outputfile readNotWrite: false.
+] on: SystemExceptions.FileError do: [:err |
+  " Print file open error and exit "
+  stderr << 'File Error: ' << err messageText << nl.
+  ObjectMemory quit: 1.
+].
+
+" compress, decompress, or print tree depending on given args "
+mode = $u ifTrue: [
+  uncompress readStream: readStream writeStream: writeStream.
+] ifFalse: [
+  compress readStream: readStream 
+      writeStream: writeStream printTree: (mode = $t).
+].
+
+" close file streams "
+readStream close.
+writeStream close.
