@@ -1,3 +1,10 @@
+/*
+
+  hzip.js
+  Usage: node hzip.js -tcu inputfile [outputfile]
+
+*/
+
 const fs = require('fs');
 const minimist = require('minimist');
 const { sprintf } = require('sprintf-js');

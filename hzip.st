@@ -1,10 +1,8 @@
-#!/opt/smalltalk/bin/gst -f
-" #!/afs/cats.ucsc.edu/courses/cmps112-wm/usr/smalltalk/bin/gst -f "
-
 "
 
-  Wyatt Ades and Lee White
   hzip.st
+  Usage: gst -f hzip.st -tcu inputfile [outputfile]
+  (gst = the GNU Smalltalk virtual machine)
 
 "
 
